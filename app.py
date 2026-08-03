@@ -28,28 +28,29 @@ def get_headers(token):
     }
 
 def append_to_single_notepad(new_spellings, token, title):
-    """查找指定云词本，去重追加（已修复 400 报错，采用标准分页拉取）"""
+    """查找指定云词本，去重追加"""
     headers = get_headers(token)
     
-    # 修复：使用标准的 while 循环 + offset 分页，分批次安全拉取所有云词本
     notepads = []
-    limit = 50
+    limit = 10  # 严格按照官方文档的示例安全阈值
     offset = 0
     
     while True:
         res = requests.get(f"{BASE_URL}/api/v1/notepads", headers=headers, params={"limit": limit, "offset": offset})
-        res.raise_for_status()
         
+        # 捕获并抛出服务器真实的报错详情，方便排查
+        if res.status_code != 200:
+            error_msg = res.text
+            raise Exception(f"拉取词本失败 (HTTP {res.status_code}): {error_msg}")
+            
         current_batch = res.json().get("notepads", [])
         notepads.extend(current_batch)
         
-        # 如果当前批次拿到的数量小于 limit，说明已经是最后一页了，跳出循环
         if len(current_batch) < limit:
             break
             
         offset += limit
     
-    # 在拉取到的所有词本中寻找目标词本
     target_id = None
     for pad in notepads:
         if pad["title"] == title:
@@ -64,7 +65,6 @@ def append_to_single_notepad(new_spellings, token, title):
             existing_words = [w.strip() for w in content.split('\n') if w.strip()]
             
     added_count = 0
-    # 清理新单词前后的空格，避免比对失败
     clean_new_spellings = [w.strip() for w in new_spellings]
     for w in clean_new_spellings:
         if w not in existing_words:
@@ -84,10 +84,14 @@ def append_to_single_notepad(new_spellings, token, title):
     
     if target_id:
         payload["id"] = target_id
-        requests.post(f"{BASE_URL}/api/v1/notepads/{target_id}", headers=headers, json=payload).raise_for_status()
+        res_post = requests.post(f"{BASE_URL}/api/v1/notepads/{target_id}", headers=headers, json=payload)
+        if res_post.status_code != 200:
+             raise Exception(f"追加词本失败: {res_post.text}")
         return f"找到已有词本，成功追加 {added_count} 个新词（过滤了 {len(new_spellings) - added_count} 个重复项）"
     else:
-        requests.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload).raise_for_status()
+        res_post = requests.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload)
+        if res_post.status_code != 200:
+             raise Exception(f"创建词本失败: {res_post.text}")
         return f"创建了全新词本，并写入了 {len(new_spellings)} 个词"
 def query_vocabulary_ids(spellings, token):
     """获取生词库 ID：双重查询机制保障成功率"""
