@@ -30,6 +30,12 @@ def get_headers(token):
         "Accept": "application/json"
     }
 
+def extract_safe(res_json, key):
+    """安全解析补丁：兼容墨墨实际返回格式中隐形的 'data' 包装层"""
+    if "data" in res_json and isinstance(res_json["data"], dict):
+        return res_json["data"].get(key, {})
+    return res_json.get(key, {})
+
 # ================= 侧边栏配置区 =================
 st.sidebar.header("⚙️ 基础配置")
 maimemo_token = st.sidebar.text_input("墨墨 API Token", type="password", help="前往墨墨 App 获取")
@@ -40,19 +46,17 @@ notepad_id = st.sidebar.text_input("目标云词本 ID (必填)", help="输入�
 
 # ================= 核心操作函数 =================
 def fetch_and_append_notepad(new_spellings, token, pad_id, session):
-    """【O(1) 精准追加】直接通过 ID 获取词本，不再遍历寻找"""
     headers = get_headers(token)
     
-    # 1. 直接获取目标词本内容
     res = session.get(f"{BASE_URL}/api/v1/notepads/{pad_id}", headers=headers)
     if not res.ok:
         raise Exception(f"读取词本失败 (HTTP {res.status_code})：请确认 ID 是否正确。服务器返回：{res.text}")
         
-    pad_data = res.json().get("notepad", {})
+    # 应用解析补丁
+    pad_data = extract_safe(res.json(), "notepad")
     content = pad_data.get("content", "")
     existing_words = [w.strip() for w in content.split('\n') if w.strip()]
             
-    # 2. 追加与去重
     added_count = 0
     clean_new_spellings = [w.strip() for w in new_spellings]
     for w in clean_new_spellings:
@@ -62,7 +66,6 @@ def fetch_and_append_notepad(new_spellings, token, pad_id, session):
             
     new_content = "\n".join(existing_words)
     
-    # 3. 按照 API 要求，回填属性并更新
     payload = {
         "notepad": {
             "title": pad_data.get("title", "27考研真题生词本"),
@@ -81,7 +84,6 @@ def fetch_and_append_notepad(new_spellings, token, pad_id, session):
     return f"成功向专属词本追加了 {added_count} 个新词（已自动过滤 {len(new_spellings) - added_count} 个重复项）"
 
 def query_vocabulary_ids(spellings, token, session):
-    """逐个查询生词 ID，记录失败原因"""
     headers = get_headers(token)
     spelling_to_id = {}
     clean_spellings = [w.strip() for w in spellings]
@@ -92,14 +94,15 @@ def query_vocabulary_ids(spellings, token, session):
         try:
             res = session.get(f"{BASE_URL}/api/v1/vocabulary", headers=headers, params={"spelling": w_lower})
             if res.ok:
-                voc_data = res.json().get("voc", {})
+                # 应用解析补丁
+                voc_data = extract_safe(res.json(), "voc")
                 if voc_data and "id" in voc_data:
                     spelling_to_id[w_lower] = voc_data["id"]
                 else:
-                    errors.append(f"【{w}】: 词库中无此词 -> {res.text}")
+                    errors.append(f"【{w}】: 词库中无此词或解析为空 -> {res.text}")
             else:
                 errors.append(f"【{w}】: 查询报错 (HTTP {res.status_code}) -> {res.text}")
-            time.sleep(1.5) # 严格限流保护：防止超过 60秒40次 限制
+            time.sleep(1.0) 
         except Exception as e:
             errors.append(f"【{w}】: 程序崩溃 -> {str(e)}")
                 
@@ -118,7 +121,6 @@ def create_note(voc_id, note_text, token, session):
     return res.ok, res.text
 
 # ================= 主界面与执行逻辑 =================
-
 if not notepad_id:
     st.info("👋 **首次使用配置指南**\n\n为了保证单词能够 100% 精准追加，程序需要绑定一个专属的云词本 ID。")
     if st.button("✨ 一键自动生成专属词本并获取 ID", type="primary"):
@@ -130,7 +132,7 @@ if not notepad_id:
                 payload = {
                     "notepad": {
                         "title": "27考研真题生词本",
-                        "content": "考研", # 初始化占位符
+                        "content": "test_word_placeholder", 
                         "brief": "AI 精翻真题生词专属仓库",
                         "tags": ["考研"],
                         "status": "PUBLISHED"
@@ -138,13 +140,16 @@ if not notepad_id:
                 }
                 res = http_session.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload)
                 if res.ok:
-                    new_id = res.json().get("notepad", {}).get("id", "")
-                    st.success(f"🎉 专属词本创建成功！\n\n请**复制**下方这串 ID，并**粘贴**到左侧边栏的【目标云词本 ID】输入框中。以后每次打开网页，只需输入这个 ID 即可完美追加！")
-                    st.code(new_id)
+                    # 修复解析，精准读取 ID
+                    new_id = extract_safe(res.json(), "notepad").get("id", "")
+                    if new_id:
+                        st.success(f"🎉 专属词本创建成功！\n\n请**复制**下方这串 ID，并**粘贴**到左侧边栏的【目标云词本 ID】输入框中。以后每次打开网页，只需输入这个 ID 即可完美追加！")
+                        st.code(new_id)
+                    else:
+                        st.error(f"解析 ID 失败，返回原始数据为: {res.text}")
                 else:
                     st.error(f"创建失败: {res.text}")
 else:
-    # 当 ID 已经输入时，展示核心同步界面
     raw_text = st.text_area("在此粘贴 Gemini 生成的 JSON 数据：", height=250, placeholder="{\n  \"words\": [\n    ...\n  ]\n}")
 
     if st.button("🚀 一键开始精准同步", use_container_width=True):
@@ -194,10 +199,10 @@ else:
                                 
                                 if voc_id:
                                     ok_interp, err_interp = create_interpretation(voc_id, w["interpretation"], maimemo_token, http_session)
-                                    time.sleep(1.5) # 严格控制频率，平均每次写入后休眠 1.5 秒
+                                    time.sleep(1.0) 
                                     
                                     ok_note, err_note = create_note(voc_id, w["note"], maimemo_token, http_session)
-                                    time.sleep(1.5) 
+                                    time.sleep(1.0) 
                                     
                                     if ok_interp and ok_note:
                                         sync_details.append(f"🟢 **{spelling}**: 释义与助记写入成功")
