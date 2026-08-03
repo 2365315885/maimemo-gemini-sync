@@ -18,10 +18,9 @@ maimemo_token = st.sidebar.text_input("墨墨 API Token", type="password", help=
 notepad_title = st.sidebar.text_input("目标云词本名称", value="27考研真题生词本")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("💡 **使用提示**\n1. 在 Gemini 获取 JSON 数据\n2. 粘贴至右侧输入框\n3. 点击开始同步即可\n\n*(注：为了防止触发 API 频控封锁，程序会在后台自动限速，请耐心等待进度条完成)*")
+st.sidebar.markdown("💡 **使用提示**\n1. 在 Gemini 获取 JSON 数据\n2. 粘贴至右侧输入框\n3. 点击开始同步即可")
 
 # ================= 全局 Session 优化 =================
-# 使用 Session 复用 TCP 连接，并配置重试策略防断连
 @st.cache_resource
 def get_http_session():
     session = requests.Session()
@@ -40,16 +39,15 @@ def get_headers(token):
 
 # ================= 核心操作函数 =================
 def append_to_single_notepad(new_spellings, token, title, session):
-    """查找指定云词本，去重追加"""
     headers = get_headers(token)
     
     notepads = []
-    limit = 10
+    limit = 50  # 恢复到单页 50 的健康数值，大幅缩短加载时间
     offset = 0
     
     while True:
         res = session.get(f"{BASE_URL}/api/v1/notepads", headers=headers, params={"limit": limit, "offset": offset})
-        if res.status_code != 200:
+        if not res.ok:  # 使用 .ok 替代严格的 == 200
             raise Exception(f"拉取词本失败 (HTTP {res.status_code}): {res.text}")
             
         current_batch = res.json().get("notepads", [])
@@ -59,7 +57,7 @@ def append_to_single_notepad(new_spellings, token, title, session):
             break
             
         offset += limit
-        time.sleep(0.5) # [限速保护] 防止狂刷分页接口导致封 IP
+        time.sleep(0.2) # 轻微睡眠，防止触发限流
     
     target_id = None
     for pad in notepads:
@@ -70,7 +68,7 @@ def append_to_single_notepad(new_spellings, token, title, session):
     existing_words = []
     if target_id:
         res = session.get(f"{BASE_URL}/api/v1/notepads/{target_id}", headers=headers)
-        if res.status_code == 200:
+        if res.ok:
             content = res.json().get("notepad", {}).get("content", "")
             existing_words = [w.strip() for w in content.split('\n') if w.strip()]
             
@@ -87,7 +85,7 @@ def append_to_single_notepad(new_spellings, token, title, session):
             "title": title,
             "brief": "AI 精翻自动追加合并的考研真题生词",
             "content": new_content,
-            "tags": ["考研", "Gemini精翻"],
+            "tags": ["考研"],
             "status": "PUBLISHED"
         }
     }
@@ -95,24 +93,23 @@ def append_to_single_notepad(new_spellings, token, title, session):
     if target_id:
         payload["id"] = target_id
         res_post = session.post(f"{BASE_URL}/api/v1/notepads/{target_id}", headers=headers, json=payload)
-        if res_post.status_code != 200:
+        if not res_post.ok: # 修复核心：自动包容 200/201 等所有成功状态码
              raise Exception(f"追加词本失败: {res_post.text}")
         return f"找到已有词本，成功追加 {added_count} 个新词（过滤了 {len(new_spellings) - added_count} 个重复项）"
     else:
         res_post = session.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload)
-        if res_post.status_code != 200:
+        if not res_post.ok: # 修复核心
              raise Exception(f"创建词本失败: {res_post.text}")
         return f"创建了全新词本，并写入了 {len(new_spellings)} 个词"
 
 def query_vocabulary_ids(spellings, token, session):
-    """获取生词库 ID（双重保障）"""
     headers = get_headers(token)
     spelling_to_id = {}
     clean_spellings = [w.strip() for w in spellings]
     
     try:
         res = session.post(f"{BASE_URL}/api/v1/vocabulary/query", headers=headers, json={"spellings": clean_spellings})
-        if res.status_code == 200:
+        if res.ok:
             for item in res.json().get("voc", []):
                 spelling_to_id[item["spelling"].lower()] = item["id"]
     except Exception:
@@ -123,11 +120,11 @@ def query_vocabulary_ids(spellings, token, session):
         if w_lower not in spelling_to_id:
             try:
                 single_res = session.get(f"{BASE_URL}/api/v1/vocabulary", headers=headers, params={"spelling": w_lower})
-                if single_res.status_code == 200:
+                if single_res.ok:
                     voc_data = single_res.json().get("voc", {})
                     if voc_data and "id" in voc_data:
                         spelling_to_id[w_lower] = voc_data["id"]
-                time.sleep(0.5) # [限速保护] 单次兜底查询也要踩刹车
+                time.sleep(0.3)
             except Exception:
                 continue
                 
@@ -167,7 +164,7 @@ if st.button("🚀 一键开始同步", use_container_width=True):
                 spellings = [w["spelling"] for w in words_data]
                 st.success(f"✅ 成功提取 {len(spellings)} 个生词：{', '.join(spellings)}")
                 
-                with st.spinner('正在与墨墨背单词通信中，为避免频控封锁，同步速度已智能放缓...'):
+                with st.spinner('正在与墨墨背单词通信中...'):
                     try:
                         # 1. 同步云词本
                         status_msg = append_to_single_notepad(spellings, maimemo_token, notepad_title, http_session)
@@ -190,9 +187,9 @@ if st.button("🚀 一键开始同步", use_container_width=True):
                             
                             if voc_id:
                                 create_interpretation(voc_id, w["interpretation"], maimemo_token, http_session)
-                                time.sleep(0.5) # [限速保护] 写入释义后暂停
+                                time.sleep(0.3)
                                 create_note(voc_id, w["note"], maimemo_token, http_session)
-                                time.sleep(0.5) # [限速保护] 写入助记后暂停，严格遵守 60秒40次 规则
+                                time.sleep(0.3)
                                 sync_details.append(f"🟢 **{spelling}**: 专属释义与助记同步成功")
                             else:
                                 sync_details.append(f"🔴 **{spelling}**: 词库匹配依然失败，仅加入云词本")
