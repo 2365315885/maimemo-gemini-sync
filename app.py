@@ -11,7 +11,6 @@ st.markdown("将 Gemini 提取的考研英语真题生词，一键追加至墨�
 
 # ================= 侧边栏配置区 =================
 st.sidebar.header("⚙️ 基础配置")
-# 使用 password 类型输入，保护你的 Token 在录屏或公共场合不泄露
 maimemo_token = st.sidebar.text_input("墨墨 API Token", type="password", help="前往墨墨 App：我的 -> 更多设置 -> 实验功能 -> API 开放 获取")
 notepad_title = st.sidebar.text_input("目标云词本名称", value="27考研真题生词本")
 
@@ -32,7 +31,8 @@ def append_to_single_notepad(new_spellings, token, title):
     """查找指定云词本，去重追加"""
     headers = get_headers(token)
     
-    res = requests.get(f"{BASE_URL}/api/v1/notepads", headers=headers)
+    # 修复1：增加 limit=500 强制拉取全部词本，防止分页导致的重复创建
+    res = requests.get(f"{BASE_URL}/api/v1/notepads", headers=headers, params={"limit": 500})
     res.raise_for_status()
     notepads = res.json().get("notepads", [])
     
@@ -50,7 +50,9 @@ def append_to_single_notepad(new_spellings, token, title):
             existing_words = [w.strip() for w in content.split('\n') if w.strip()]
             
     added_count = 0
-    for w in new_spellings:
+    # 清理新单词前后的空格，避免比对失败
+    clean_new_spellings = [w.strip() for w in new_spellings]
+    for w in clean_new_spellings:
         if w not in existing_words:
             existing_words.append(w)
             added_count += 1
@@ -75,12 +77,34 @@ def append_to_single_notepad(new_spellings, token, title):
         return f"创建了全新词本，并写入了 {len(new_spellings)} 个词"
 
 def query_vocabulary_ids(spellings, token):
-    """获取生词库 ID"""
+    """获取生词库 ID：双重查询机制保障成功率"""
     headers = get_headers(token)
-    res = requests.post(f"{BASE_URL}/api/v1/vocabulary/query", headers=headers, json={"spellings": spellings})
-    res.raise_for_status()
-    voc_list = res.json().get("voc", [])
-    return {item["spelling"].lower(): item["id"] for item in voc_list}
+    spelling_to_id = {}
+    clean_spellings = [w.strip() for w in spellings]
+    
+    # 第 1 层保险：尝试批量 POST 查询
+    try:
+        res = requests.post(f"{BASE_URL}/api/v1/vocabulary/query", headers=headers, json={"spellings": clean_spellings})
+        if res.status_code == 200:
+            for item in res.json().get("voc", []):
+                spelling_to_id[item["spelling"].lower()] = item["id"]
+    except Exception:
+        pass # 如果批量接口崩溃，直接进入单次查询兜底
+
+    # 第 2 层保险：遍历检查，对于批量接口漏掉的词，使用精确 GET 接口单独查询
+    for w in clean_spellings:
+        w_lower = w.lower()
+        if w_lower not in spelling_to_id:
+            try:
+                single_res = requests.get(f"{BASE_URL}/api/v1/vocabulary", headers=headers, params={"spelling": w_lower})
+                if single_res.status_code == 200:
+                    voc_data = single_res.json().get("voc", {})
+                    if voc_data and "id" in voc_data:
+                        spelling_to_id[w_lower] = voc_data["id"]
+            except Exception:
+                continue
+                
+    return spelling_to_id
 
 def create_interpretation(voc_id, interpretation_text, token):
     """写入 AI 专属释义"""
@@ -134,7 +158,7 @@ if st.button("🚀 一键开始同步", use_container_width=True):
                         total_words = len(words_data)
                         
                         for idx, w in enumerate(words_data):
-                            spelling = w["spelling"].lower()
+                            spelling = w["spelling"].strip().lower()
                             voc_id = spelling_to_id.get(spelling)
                             status_text.text(f"正在同步: {spelling} ({idx+1}/{total_words})")
                             
@@ -143,7 +167,7 @@ if st.button("🚀 一键开始同步", use_container_width=True):
                                 create_note(voc_id, w["note"], maimemo_token)
                                 sync_details.append(f"🟢 **{spelling}**: 专属释义与助记同步成功")
                             else:
-                                sync_details.append(f"🔴 **{spelling}**: 词库匹配失败，仅加入云词本")
+                                sync_details.append(f"🔴 **{spelling}**: 词库匹配依然失败，可能该词条在墨墨底层词库中不存在")
                                 
                             progress_bar.progress((idx + 1) / total_words)
                         
@@ -155,10 +179,10 @@ if st.button("🚀 一键开始同步", use_container_width=True):
                                 st.markdown(detail)
                                 
                         st.balloons()
-                        st.success(f"🎉 任务圆满完成！快去墨墨 App 里刷这些真题词汇吧！")
+                        st.success(f"🎉 任务圆满完成！")
                         
                     except Exception as e:
                         st.error(f"🌐 网络请求异常: {str(e)}")
                         
         except json.JSONDecodeError:
-            st.error("❌ JSON 解析失败！请确保粘贴的代码结构完整，不包含多余的中文描述。")
+            st.error("❌ JSON 解析失败！请确保粘贴的代码结构完整，不包含多余的文字。")
