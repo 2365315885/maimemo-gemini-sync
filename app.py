@@ -115,7 +115,6 @@ def create_interpretation(voc_id, interpretation_text, token, session):
             "status": "PUBLISHED"
         }
     }
-    # 🚨 修复1：补全官方文档最新截图中的 /memo/ 路径
     res = session.post(f"{BASE_URL}/api/v1/memo/interpretations", headers=headers, json=payload)
     
     if res.ok:
@@ -129,8 +128,7 @@ def create_note(voc_id, note_text, token, session):
     payload = {
         "note": {
             "voc_id": voc_id,
-            # 🚨 必须严格使用官方示例中的 "谐音."，使用其他任何词都会导致墨墨后端 500 崩溃
-            "note_type": "谐音.", 
+            "note_type": "谐音.", # 🚨 解决 500 Internal server error 的关键
             "note": note_text
         }
     }
@@ -194,7 +192,7 @@ else:
                     
                     with st.spinner('正在与墨墨背单词通信中，为避免防爬虫封锁，写入速度已智能放缓 (约1-2秒/词)...'):
                         try:
-                            # 1. 精准追加词本
+                            # 1. 精准追加词本 (O(1)复杂度)
                             status_msg = fetch_and_append_notepad(spellings, maimemo_token, notepad_id, http_session)
                             st.info(f"📁 词本操作: {status_msg}")
                             
