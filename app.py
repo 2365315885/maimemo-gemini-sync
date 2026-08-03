@@ -31,7 +31,6 @@ def get_headers(token):
     }
 
 def extract_safe(res_json, key):
-    """安全解析补丁：兼容墨墨实际返回格式中隐形的 'data' 包装层"""
     if "data" in res_json and isinstance(res_json["data"], dict):
         return res_json["data"].get(key, {})
     return res_json.get(key, {})
@@ -52,7 +51,6 @@ def fetch_and_append_notepad(new_spellings, token, pad_id, session):
     if not res.ok:
         raise Exception(f"读取词本失败 (HTTP {res.status_code})：请确认 ID 是否正确。服务器返回：{res.text}")
         
-    # 应用解析补丁
     pad_data = extract_safe(res.json(), "notepad")
     content = pad_data.get("content", "")
     existing_words = [w.strip() for w in content.split('\n') if w.strip()]
@@ -94,7 +92,6 @@ def query_vocabulary_ids(spellings, token, session):
         try:
             res = session.get(f"{BASE_URL}/api/v1/vocabulary", headers=headers, params={"spelling": w_lower})
             if res.ok:
-                # 应用解析补丁
                 voc_data = extract_safe(res.json(), "voc")
                 if voc_data and "id" in voc_data:
                     spelling_to_id[w_lower] = voc_data["id"]
@@ -110,15 +107,41 @@ def query_vocabulary_ids(spellings, token, session):
 
 def create_interpretation(voc_id, interpretation_text, token, session):
     headers = get_headers(token)
-    payload = {"interpretation": {"voc_id": voc_id, "interpretation": interpretation_text, "tags": ["考研"], "status": "PUBLISHED"}}
-    res = session.post(f"{BASE_URL}/api/v1/interpretations", headers=headers, json=payload)
-    return res.ok, res.text
+    payload = {
+        "interpretation": {
+            "voc_id": voc_id,
+            "interpretation": interpretation_text,
+            "tags": ["考研"],
+            "status": "PUBLISHED"
+        }
+    }
+    # 🚨 修复1：补全官方文档最新截图中的 /memo/ 路径
+    res = session.post(f"{BASE_URL}/api/v1/memo/interpretations", headers=headers, json=payload)
+    
+    if res.ok:
+        if str(res.json().get("success", True)).lower() == "false":
+             return False, res.text
+        return True, res.text
+    return False, res.text
 
 def create_note(voc_id, note_text, token, session):
     headers = get_headers(token)
-    payload = {"note": {"voc_id": voc_id, "note_type": "助记", "note": note_text}}
-    res = session.post(f"{BASE_URL}/api/v1/notes", headers=headers, json=payload)
-    return res.ok, res.text
+    payload = {
+        "note": {
+            "voc_id": voc_id,
+            # 🚨 修复2：严格遵守带句号的官方枚举规范
+            "note_type": "串记.", 
+            "note": note_text
+        }
+    }
+    # 🚨 修复1：补全官方文档最新截图中的 /memo/ 路径
+    res = session.post(f"{BASE_URL}/api/v1/memo/notes", headers=headers, json=payload)
+    
+    if res.ok:
+        if str(res.json().get("success", True)).lower() == "false":
+             return False, res.text
+        return True, res.text
+    return False, res.text
 
 # ================= 主界面与执行逻辑 =================
 if not notepad_id:
@@ -140,7 +163,6 @@ if not notepad_id:
                 }
                 res = http_session.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload)
                 if res.ok:
-                    # 修复解析，精准读取 ID
                     new_id = extract_safe(res.json(), "notepad").get("id", "")
                     if new_id:
                         st.success(f"🎉 专属词本创建成功！\n\n请**复制**下方这串 ID，并**粘贴**到左侧边栏的【目标云词本 ID】输入框中。以后每次打开网页，只需输入这个 ID 即可完美追加！")
@@ -173,7 +195,7 @@ else:
                     
                     with st.spinner('正在与墨墨背单词通信中，为避免防爬虫封锁，写入速度已智能放缓 (约1-2秒/词)...'):
                         try:
-                            # 1. 精准追加词本 (O(1)复杂度)
+                            # 1. 精准追加词本
                             status_msg = fetch_and_append_notepad(spellings, maimemo_token, notepad_id, http_session)
                             st.info(f"📁 词本操作: {status_msg}")
                             
