@@ -129,12 +129,11 @@ def create_note(voc_id, note_text, token, session):
     payload = {
         "note": {
             "voc_id": voc_id,
-            # 🚨 修复2：严格遵守带句号的官方枚举规范
-            "note_type": "串记.", 
+            # 🚨 必须严格使用官方示例中的 "谐音."，使用其他任何词都会导致墨墨后端 500 崩溃
+            "note_type": "谐音.", 
             "note": note_text
         }
     }
-    # 🚨 修复1：补全官方文档最新截图中的 /memo/ 路径
     res = session.post(f"{BASE_URL}/api/v1/memo/notes", headers=headers, json=payload)
     
     if res.ok:
