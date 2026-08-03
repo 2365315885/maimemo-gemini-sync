@@ -42,12 +42,13 @@ def append_to_single_notepad(new_spellings, token, title, session):
     headers = get_headers(token)
     
     notepads = []
-    limit = 50  # 恢复到单页 50 的健康数值，大幅缩短加载时间
+    # ！！！核心修改：严格遵守官方上限，超过 10 就会报 HTTP 400 错误
+    limit = 10 
     offset = 0
     
     while True:
         res = session.get(f"{BASE_URL}/api/v1/notepads", headers=headers, params={"limit": limit, "offset": offset})
-        if not res.ok:  # 使用 .ok 替代严格的 == 200
+        if not res.ok:  
             raise Exception(f"拉取词本失败 (HTTP {res.status_code}): {res.text}")
             
         current_batch = res.json().get("notepads", [])
@@ -57,7 +58,7 @@ def append_to_single_notepad(new_spellings, token, title, session):
             break
             
         offset += limit
-        time.sleep(0.2) # 轻微睡眠，防止触发限流
+        time.sleep(0.3) # 配合 limit=10，稍微增加一点休眠时间，确保绝对安全
     
     target_id = None
     for pad in notepads:
@@ -93,12 +94,12 @@ def append_to_single_notepad(new_spellings, token, title, session):
     if target_id:
         payload["id"] = target_id
         res_post = session.post(f"{BASE_URL}/api/v1/notepads/{target_id}", headers=headers, json=payload)
-        if not res_post.ok: # 修复核心：自动包容 200/201 等所有成功状态码
+        if not res_post.ok: 
              raise Exception(f"追加词本失败: {res_post.text}")
         return f"找到已有词本，成功追加 {added_count} 个新词（过滤了 {len(new_spellings) - added_count} 个重复项）"
     else:
         res_post = session.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload)
-        if not res_post.ok: # 修复核心
+        if not res_post.ok: 
              raise Exception(f"创建词本失败: {res_post.text}")
         return f"创建了全新词本，并写入了 {len(new_spellings)} 个词"
 
