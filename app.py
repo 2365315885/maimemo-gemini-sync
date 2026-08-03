@@ -28,14 +28,28 @@ def get_headers(token):
     }
 
 def append_to_single_notepad(new_spellings, token, title):
-    """查找指定云词本，去重追加"""
+    """查找指定云词本，去重追加（已修复 400 报错，采用标准分页拉取）"""
     headers = get_headers(token)
     
-    # 修复1：增加 limit=500 强制拉取全部词本，防止分页导致的重复创建
-    res = requests.get(f"{BASE_URL}/api/v1/notepads", headers=headers, params={"limit": 500})
-    res.raise_for_status()
-    notepads = res.json().get("notepads", [])
+    # 修复：使用标准的 while 循环 + offset 分页，分批次安全拉取所有云词本
+    notepads = []
+    limit = 50
+    offset = 0
     
+    while True:
+        res = requests.get(f"{BASE_URL}/api/v1/notepads", headers=headers, params={"limit": limit, "offset": offset})
+        res.raise_for_status()
+        
+        current_batch = res.json().get("notepads", [])
+        notepads.extend(current_batch)
+        
+        # 如果当前批次拿到的数量小于 limit，说明已经是最后一页了，跳出循环
+        if len(current_batch) < limit:
+            break
+            
+        offset += limit
+    
+    # 在拉取到的所有词本中寻找目标词本
     target_id = None
     for pad in notepads:
         if pad["title"] == title:
@@ -75,7 +89,6 @@ def append_to_single_notepad(new_spellings, token, title):
     else:
         requests.post(f"{BASE_URL}/api/v1/notepads", headers=headers, json=payload).raise_for_status()
         return f"创建了全新词本，并写入了 {len(new_spellings)} 个词"
-
 def query_vocabulary_ids(spellings, token):
     """获取生词库 ID：双重查询机制保障成功率"""
     headers = get_headers(token)
