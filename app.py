@@ -128,8 +128,11 @@ def create_note(voc_id, note_text, token, session):
     payload = {
         "note": {
             "voc_id": voc_id,
-            "note_type": "谐音.", # 🚨 解决 500 Internal server error 的关键
-            "note": note_text
+            # 🚨 修复 1：去掉被官方文档误导的句号，防止后端枚举映射崩溃
+            "note_type": "谐音", 
+            "note": note_text,
+            # 🚨 修复 2：强行补上官方文档遗漏的必填状态，防止数据库插入报错
+            "status": "PUBLISHED" 
         }
     }
     res = session.post(f"{BASE_URL}/api/v1/memo/notes", headers=headers, json=payload)
